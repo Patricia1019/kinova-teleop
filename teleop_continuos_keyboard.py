@@ -4,6 +4,7 @@ import sys
 import os
 import time
 import threading
+import termios
 
 from pynput import keyboard
 
@@ -12,6 +13,41 @@ from kortex_api.autogen.client_stubs.BaseCyclicClientRpc import BaseCyclicClient
 from kortex_api.autogen.messages import Base_pb2, BaseCyclic_pb2
 
 TIMEOUT_DURATION = 30.0
+
+# ------------ TTY helpers: disable terminal echo ------------
+
+def disable_terminal_echo():
+    """
+    Disable echo *and* canonical mode so key presses are not printed
+    and are not line-buffered. Returns old settings so they can be restored.
+    """
+    if not sys.stdin.isatty():
+        return None
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    new_settings = termios.tcgetattr(fd)
+
+    # lflags (index 3): turn off ECHO and ICANON
+    new_settings[3] &= ~(termios.ECHO | termios.ICANON)
+
+    termios.tcsetattr(fd, termios.TCSADRAIN, new_settings)
+    return old_settings
+
+
+def restore_terminal_settings(old_settings):
+    """
+    Restore previous terminal settings and flush any buffered input.
+    """
+    if old_settings is None:
+        return
+
+    fd = sys.stdin.fileno()
+    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    # Flush any pending characters typed while echo was off
+    termios.tcflush(fd, termios.TCIFLUSH)
+
+
 
 # ------------ Kinova helpers ------------
 
@@ -22,10 +58,12 @@ def check_for_end_or_abort(e):
             e.set()
     return _cb
 
+
 def set_single_level_servoing(base: BaseClient):
     servo = Base_pb2.ServoingModeInformation()
     servo.servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING
     base.SetServoingMode(servo)
+
 
 def example_move_to_home_position(base: BaseClient):
     set_single_level_servoing(base)
@@ -62,6 +100,7 @@ def example_move_to_home_position(base: BaseClient):
     print("Home position reached.")
     return True
 
+
 # ------------ Keyboard state ------------
 
 # keys that affect twist / discrete actions
@@ -71,6 +110,7 @@ key_state = {k: False for k in KEYS_OF_INTEREST}
 stop_flag = False
 home_requested = False
 help_requested = False
+
 
 def on_press(key):
     global stop_flag, home_requested, help_requested
@@ -82,25 +122,29 @@ def on_press(key):
         if key == keyboard.Key.esc:
             print("ESC pressed, stopping teleop...")
             stop_flag = True
-        return
+        return  # DO NOT return False; we want listener to keep running
 
-    # continuous keys
+    # continuous keys: movement
     if ch in key_state:
         key_state[ch] = True
 
-    # discrete actions
+    # one-shot keys
     if ch == 'h':
         home_requested = True
     elif ch == '?':
         help_requested = True
 
+
 def on_release(key):
     try:
         ch = key.char
     except AttributeError:
-        return
+        return  # ignore special key releases
+
     if ch in key_state:
         key_state[ch] = False
+    # DO NOT return False; that would stop the listener
+
 
 # ------------ Help text ------------
 
@@ -124,10 +168,12 @@ def print_help():
     print("  ESC   : quit teleop")
     print("")
 
+
 # ------------ Twist computation ------------
 
 LIN_SPEED = 0.2   # m/s
 ANG_SPEED = 20.0   # deg/s
+
 
 def build_twist_from_keys():
     """
@@ -165,6 +211,7 @@ def build_twist_from_keys():
 
     return twist
 
+
 def teleop_twist_loop(base: BaseClient):
     """
     Main streaming loop: at ~50 Hz, send a TwistCommand based on current key_state.
@@ -187,7 +234,6 @@ def teleop_twist_loop(base: BaseClient):
             print("Home requested by key 'h'...")
             home_requested = False
             example_move_to_home_position(base)
-            # After Home, continue streaming twist as usual
 
         if help_requested:
             help_requested = False
@@ -195,7 +241,7 @@ def teleop_twist_loop(base: BaseClient):
 
         twist = build_twist_from_keys()
         cmd.twist.CopyFrom(twist)
-        cmd.duration = 0   # int, in your API; 0 = stream
+        cmd.duration = 0   # int in your API
 
         base.SendTwistCommand(cmd)
         time.sleep(dt)
@@ -207,6 +253,7 @@ def teleop_twist_loop(base: BaseClient):
     base.SendTwistCommand(cmd)
     print("Teleop loop stopped, robot commanded to zero twist.")
 
+
 # ------------ main() ------------
 
 def main():
@@ -216,9 +263,12 @@ def main():
 
     args = utilities.parseConnectionArguments()
 
+    # Disable echo so keys aren't printed
+    old_tty = disable_terminal_echo()
+
     with utilities.DeviceConnection.createTcpConnection(args) as router:
         base = BaseClient(router)
-        base_cyclic = BaseCyclicClient(router)  # unused now but kept in case you extend
+        base_cyclic = BaseCyclicClient(router)  # kept for future extensions
 
         # Optional: go Home once at startup
         example_move_to_home_position(base)
@@ -231,8 +281,10 @@ def main():
             teleop_twist_loop(base)
         finally:
             listener.stop()
+            restore_terminal_settings(old_tty)
 
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
