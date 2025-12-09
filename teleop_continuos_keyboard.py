@@ -13,6 +13,8 @@ from kortex_api.autogen.client_stubs.BaseCyclicClientRpc import BaseCyclicClient
 from kortex_api.autogen.messages import Base_pb2, BaseCyclic_pb2
 
 TIMEOUT_DURATION = 30.0
+LIN_SPEED = 0.2   # m/s
+ANG_SPEED = 20.0  # deg/s
 
 # ------------ TTY helpers: disable terminal echo ------------
 
@@ -46,7 +48,6 @@ def restore_terminal_settings(old_settings):
     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     # Flush any pending characters typed while echo was off
     termios.tcflush(fd, termios.TCIFLUSH)
-
 
 
 # ------------ Kinova helpers ------------
@@ -101,6 +102,31 @@ def example_move_to_home_position(base: BaseClient):
     return True
 
 
+# ------------ Gripper helpers ------------
+
+def send_gripper_position(base: BaseClient, position: float):
+    """
+    Send a single gripper position command.
+    position in [0.0 (open), 1.0 (closed)]
+    """
+    cmd = Base_pb2.GripperCommand()
+    cmd.mode = Base_pb2.GRIPPER_POSITION
+    finger = cmd.gripper.finger.add()
+    finger.finger_identifier = 1
+    finger.value = position
+    base.SendGripperCommand(cmd)
+
+
+def open_gripper(base: BaseClient):
+    print("Opening gripper...")
+    send_gripper_position(base, 0.0)
+
+
+def close_gripper(base: BaseClient):
+    print("Closing gripper...")
+    send_gripper_position(base, 1.0)
+
+
 # ------------ Keyboard state ------------
 
 # keys that affect twist / discrete actions
@@ -110,10 +136,13 @@ key_state = {k: False for k in KEYS_OF_INTEREST}
 stop_flag = False
 home_requested = False
 help_requested = False
+open_gripper_requested = False
+close_gripper_requested = False
 
 
 def on_press(key):
     global stop_flag, home_requested, help_requested
+    global open_gripper_requested, close_gripper_requested
 
     try:
         ch = key.char
@@ -122,17 +151,21 @@ def on_press(key):
         if key == keyboard.Key.esc:
             print("ESC pressed, stopping teleop...")
             stop_flag = True
-        return  # DO NOT return False; we want listener to keep running
+        return  # keep listener running
 
     # continuous keys: movement
     if ch in key_state:
         key_state[ch] = True
 
-    # one-shot keys
+    # one-shot actions
     if ch == 'h':
         home_requested = True
     elif ch == '?':
         help_requested = True
+    elif ch == '[':
+        open_gripper_requested = True
+    elif ch == ']':
+        close_gripper_requested = True
 
 
 def on_release(key):
@@ -143,7 +176,6 @@ def on_release(key):
 
     if ch in key_state:
         key_state[ch] = False
-    # DO NOT return False; that would stop the listener
 
 
 # ------------ Help text ------------
@@ -162,6 +194,10 @@ def print_help():
     print("  j / l : +pitch / -pitch (around Y)")
     print("  u / o : +yaw / -yaw (around Z)")
     print("")
+    print("Gripper:")
+    print("  [     : open gripper")
+    print("  ]     : close gripper")
+    print("")
     print("Other:")
     print("  h     : go to Home position")
     print("  ?     : print this help")
@@ -170,10 +206,6 @@ def print_help():
 
 
 # ------------ Twist computation ------------
-
-LIN_SPEED = 0.2   # m/s
-ANG_SPEED = 20.0   # deg/s
-
 
 def build_twist_from_keys():
     """
@@ -218,6 +250,8 @@ def teleop_twist_loop(base: BaseClient):
     Robot moves continuously while keys are held.
     """
     global stop_flag, home_requested, help_requested
+    global open_gripper_requested, close_gripper_requested
+
     set_single_level_servoing(base)
 
     cmd = Base_pb2.TwistCommand()
@@ -238,6 +272,14 @@ def teleop_twist_loop(base: BaseClient):
         if help_requested:
             help_requested = False
             print_help()
+
+        if open_gripper_requested:
+            open_gripper_requested = False
+            open_gripper(base)
+
+        if close_gripper_requested:
+            close_gripper_requested = False
+            close_gripper(base)
 
         twist = build_twist_from_keys()
         cmd.twist.CopyFrom(twist)
