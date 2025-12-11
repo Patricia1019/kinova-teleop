@@ -19,34 +19,21 @@ ANG_SPEED = 20.0  # deg/s
 # ------------ TTY helpers: disable terminal echo ------------
 
 def disable_terminal_echo():
-    """
-    Disable echo *and* canonical mode so key presses are not printed
-    and are not line-buffered. Returns old settings so they can be restored.
-    """
     if not sys.stdin.isatty():
         return None
-
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     new_settings = termios.tcgetattr(fd)
-
-    # lflags (index 3): turn off ECHO and ICANON
     new_settings[3] &= ~(termios.ECHO | termios.ICANON)
-
     termios.tcsetattr(fd, termios.TCSADRAIN, new_settings)
     return old_settings
 
 
 def restore_terminal_settings(old_settings):
-    """
-    Restore previous terminal settings and flush any buffered input.
-    """
     if old_settings is None:
         return
-
     fd = sys.stdin.fileno()
     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    # Flush any pending characters typed while echo was off
     termios.tcflush(fd, termios.TCIFLUSH)
 
 
