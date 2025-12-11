@@ -292,7 +292,7 @@ def main():
 
     args = utilities.parseConnectionArguments()
 
-    # Disable echo so keys aren't printed
+    # Disable echo so keys aren't printed (like your ROS teleop)
     old_tty = disable_terminal_echo()
 
     with utilities.DeviceConnection.createTcpConnection(args) as router:
