@@ -1,4 +1,4 @@
-The command for running recording data from teleoperation is:
+The command for recording data from teleoperation is:
 ```bash
 rosbag record -O /your/file/path.bag \
     /camera/color/image_raw \
